@@ -66,9 +66,10 @@
 		
 		public function addAssignee($assignee, $role)
 		{
-			$retval = TBGComponentAssigneesTable::getTable()->addAssigneeToComponent($this->getID(), $assignee, $role);
-			
-			return $retval;
+		    // N3XFIX: Old usage
+			//return TBGComponentAssigneesTable::getTable()->addAssigneeToComponent($this->getID(), $assignee, $role);
+		
+			return TBGComponentAssignedUsersTable::getTable()->addUserToComponent($this->getID(), $assignee, $role);
 		}
 		
 		protected function _preDelete()
@@ -87,10 +88,20 @@
 		
 		protected function _populateAssignees()
 		{
-			if ($this->_assignees === null)
+			if ($this->_assignees == null)
 			{
-				$this->_assignees = TBGComponentAssigneesTable::getTable()->getByComponentID($this->getID());
+				$this->_assignees=array();
 			}
+			if (!array_key_exists('users',$this->_assignees))
+			{	
+				$this->_assignees['users'] = TBGComponentAssignedUsersTable::getTable()->getByComponentID($this->getID());
+			}
+			if (!array_key_exists('teams',$this->_assignees))
+			{	
+				$this->_assignees['teams'] = TBGComponentAssignedTeamsTable::getTable()->getByComponentID($this->getID());
+			}
+			//var_dump($this->_assignees);
+			//die();
 		}
 		
 		/**

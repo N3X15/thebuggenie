@@ -82,5 +82,13 @@
 			$crit->addWhere(self::TEAM_ID, $team);
 			$this->doDelete($crit);
 		}
+		
+		public function getByComponentID($component_id)
+		{
+			$crit = $this->getCriteria();
+			$crit->addWhere(self::COMPONENT_ID, $component_id);
+			$res = $this->select($crit, false);
+			return $res;
+		}
 
 	}
