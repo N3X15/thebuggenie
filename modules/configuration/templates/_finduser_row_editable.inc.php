@@ -1,14 +1,19 @@
-	<form action="<?php echo make_url('configure_users_update_user', array('user_id' => $user->getID())); ?>" method="post" onsubmit="editUser('<?php echo make_url('configure_users_update_user', array('user_id' => $user->getID())); ?>', '<?php echo $user->getID(); ?>');return false;" id="edituser_<?php echo $user->getID(); ?>_form">
+<?php if ($user->isScopeConfirmed()): ?>
+	<form action="<?php echo make_url('configure_users_update_user', array('user_id' => $user->getID())); ?>" method="post" onsubmit="TBG.Config.User.update('<?php echo make_url('configure_users_update_user', array('user_id' => $user->getID())); ?>', '<?php echo $user->getID(); ?>');return false;" id="edituser_<?php echo $user->getID(); ?>_form">
 		<table style="width: 100%;">
 			<tr>
 				<td><label for="username_<?php echo $user->getID(); ?>"><?php echo __('Username'); ?></label></td>
 				<td><?php if (TBGSettings::isUsingExternalAuthenticationBackend()): echo $user->getUsername(); else: ?><input type="text" name="username" id="username_<?php echo $user->getID(); ?>" style="width: 120px;" value="<?php echo $user->getUsername(); ?>"><?php endif; ?></td>
 				<td><label for="activated_<?php echo $user->getID(); ?>_yes"><?php echo __('Activated'); ?></label></td>
 				<td valign="middle">
-					<input type="radio" name="activated" id="activated_<?php echo $user->getID(); ?>_yes" value="1"<?php if ($user->isActivated()): ?> checked<?php endif; ?>>
-					<label for="activated_<?php echo $user->getID(); ?>_yes" style="font-weight: normal;"><?php echo __('Yes'); ?></label>&nbsp;
-					<input type="radio" name="activated" id="activated_<?php echo $user->getID(); ?>_no" value="0"<?php if (!$user->isActivated()): ?> checked<?php endif; ?>>
-					<label for="activated_<?php echo $user->getID(); ?>_no" style="font-weight: normal;"><?php echo __('No'); ?></label>
+					<?php if (TBGContext::getScope()->isDefault()): ?>
+						<input type="radio" name="activated" id="activated_<?php echo $user->getID(); ?>_yes" value="1"<?php if ($user->isActivated()): ?> checked<?php endif; ?>>
+						<label for="activated_<?php echo $user->getID(); ?>_yes" style="font-weight: normal;"><?php echo __('Yes'); ?></label>&nbsp;
+						<input type="radio" name="activated" id="activated_<?php echo $user->getID(); ?>_no" value="0"<?php if (!$user->isActivated()): ?> checked<?php endif; ?>>
+						<label for="activated_<?php echo $user->getID(); ?>_no" style="font-weight: normal;"><?php echo __('No'); ?></label>
+					<?php else: ?>
+						<?php echo ($user->isActivated()) ? __('Yes') : __('No'); ?>
+					<?php endif; ?>
 				</td>
 			</tr>
 			<tr>
@@ -16,10 +21,14 @@
 				<td><?php if (TBGSettings::isUsingExternalAuthenticationBackend()): if ($user->getRealname() == null): echo '-'; else: echo $user->getRealname(); endif; else: ?><input type="text" name="realname" id="realname_<?php echo $user->getID(); ?>" style="width: 220px;" value="<?php echo $user->getRealname(); ?>"><?php endif; ?></td>
 				<td><label for="enabled_<?php echo $user->getID(); ?>_yes"><?php echo __('Enabled'); ?></label></td>
 				<td valign="middle">
-					<input type="radio" name="enabled" id="enabled_<?php echo $user->getID(); ?>_yes" value="1"<?php if ($user->isEnabled()): ?> checked<?php endif; ?>>
-					<label for="enabled_<?php echo $user->getID(); ?>_yes" style="font-weight: normal;"><?php echo __('Yes'); ?></label>&nbsp;
-					<input type="radio" name="enabled" id="enabled_<?php echo $user->getID(); ?>_no" value="0"<?php if (!$user->isEnabled()): ?> checked<?php endif; ?>>
-					<label for="enabled_<?php echo $user->getID(); ?>_no" style="font-weight: normal;"><?php echo __('No'); ?></label>
+					<?php if (TBGContext::getScope()->isDefault()): ?>
+						<input type="radio" name="enabled" id="enabled_<?php echo $user->getID(); ?>_yes" value="1"<?php if ($user->isEnabled()): ?> checked<?php endif; ?>>
+						<label for="enabled_<?php echo $user->getID(); ?>_yes" style="font-weight: normal;"><?php echo __('Yes'); ?></label>&nbsp;
+						<input type="radio" name="enabled" id="enabled_<?php echo $user->getID(); ?>_no" value="0"<?php if (!$user->isEnabled()): ?> checked<?php endif; ?>>
+						<label for="enabled_<?php echo $user->getID(); ?>_no" style="font-weight: normal;"><?php echo __('No'); ?></label>
+					<?php else: ?>
+						<?php echo ($user->isEnabled()) ? __('Yes') : __('No'); ?>
+					<?php endif; ?>
 				</td>
 			</tr>
 			<tr>
@@ -75,8 +84,10 @@
 				<td style="vertical-align: top; padding-top: 4px;"><label><?php echo __('Member of team(s)'); ?></label></td>
 				<td colspan="3">
 					<?php foreach (TBGTeam::getAll() as $team): ?>
-						<input type="checkbox" name="teams[<?php echo $team->getID(); ?>]" id="team_<?php echo $user->getID(); ?>_<?php echo $team->getID(); ?>" value="<?php echo $team->getID(); ?>"<?php if ($user->isMemberOfTeam($team)): ?> checked<?php endif; ?>>
-						<label for="team_<?php echo $user->getID(); ?>_<?php echo $team->getID(); ?>" style="font-weight: normal;"><?php echo $team->getName(); ?></label>&nbsp;&nbsp;
+						<div>
+							<input type="checkbox" name="teams[<?php echo $team->getID(); ?>]" id="team_<?php echo $user->getID(); ?>_<?php echo $team->getID(); ?>" value="<?php echo $team->getID(); ?>"<?php if ($user->isMemberOfTeam($team)): ?> checked<?php endif; ?>>
+							<label for="team_<?php echo $user->getID(); ?>_<?php echo $team->getID(); ?>" style="font-weight: normal;"><?php echo $team->getName(); ?></label>&nbsp;&nbsp;
+						</div>
 					<?php endforeach; ?>
 					<?php if (count(TBGTeam::getAll()) == 0): ?>
 						<?php echo __('No teams exist'); ?>
@@ -87,8 +98,10 @@
 				<td style="vertical-align: top; padding-top: 4px;"><label><?php echo __('Member of client(s)'); ?></label></td>
 				<td colspan="3">
 					<?php foreach (TBGClient::getAll() as $client): ?>
-						<input type="checkbox" name="clients[<?php echo $client->getID(); ?>]" id="client_<?php echo $user->getID(); ?>_<?php echo $client->getID(); ?>" value="<?php echo $client->getID(); ?>"<?php if ($user->isMemberOfClient($client)): ?> checked<?php endif; ?>>
-						<label for="client_<?php echo $user->getID(); ?>_<?php echo $client->getID(); ?>" style="font-weight: normal;"><?php echo $client->getName(); ?></label>&nbsp;&nbsp;
+						<div>
+							<input type="checkbox" name="clients[<?php echo $client->getID(); ?>]" id="client_<?php echo $user->getID(); ?>_<?php echo $client->getID(); ?>" value="<?php echo $client->getID(); ?>"<?php if ($user->isMemberOfClient($client)): ?> checked<?php endif; ?>>
+							<label for="client_<?php echo $user->getID(); ?>_<?php echo $client->getID(); ?>" style="font-weight: normal;"><?php echo $client->getName(); ?></label>&nbsp;&nbsp;
+						</div>
 					<?php endforeach; ?>
 					<?php if (count(TBGClient::getAll()) == 0): ?>
 						<?php echo __('No clients exist'); ?>
@@ -104,3 +117,4 @@
 			</tr>
 		</table>
 	</form>
+<?php endif; ?>

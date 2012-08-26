@@ -6,7 +6,7 @@
 		<?php endif; ?>
 	</div>
 	<?php if (count(TBGProject::getAll())): ?>
-		<div id="wiki_dropdown_menu" class="tab_menu_dropdown shadowed">
+		<div id="wiki_dropdown_menu" class="tab_menu_dropdown">
 			<?php if (TBGContext::isProjectContext()): ?>
 				<div class="header"><?php echo __('Currently selected project'); ?></div>
 				<?php echo link_tag($project_url, __('Project wiki frontpage')); ?>
@@ -28,7 +28,7 @@
 			<?php if (count(TBGProject::getAll()) > (int) TBGContext::isProjectContext()): ?>
 				<div class="header"><?php echo __('Project wikis'); ?></div>
 				<?php foreach (TBGProject::getAll() as $project): ?>
-					<?php if (isset($project_url) && $project->getID() == TBGContext::getCurrentProject()->getID()) continue; ?>
+					<?php if (!$project->hasAccess() || (isset($project_url) && $project->getID() == TBGContext::getCurrentProject()->getID())) continue; ?>
 					<?php echo link_tag(make_url('publish_article', array('article_name' => ucfirst($project->getKey()).':MainPage')), $project->getName()); ?>
 				<?php endforeach; ?>
 			<?php endif; ?>

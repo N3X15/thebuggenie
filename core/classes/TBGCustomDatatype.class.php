@@ -1,10 +1,11 @@
 <?php
 
+	/**
+	 * @Table(name="TBGCustomFieldsTable")
+	 */
 	class TBGCustomDatatype extends TBGDatatypeBase
 	{
 		
-		static protected $_b2dbtablename = 'TBGCustomFieldsTable';
-
 		const DROPDOWN_CHOICE_TEXT = 1;
 		const INPUT_TEXT = 2;
 		const INPUT_TEXTAREA_MAIN = 3;
@@ -21,9 +22,6 @@
 		const USER_CHOICE = 14;
 		const TEAM_CHOICE = 15;
 		const USER_OR_TEAM_CHOICE = 17;
-		const DROPDOWN_CHOICE_TEXT_COLORED = 18;
-		const DROPDOWN_CHOICE_TEXT_COLOR = 19;
-		const DROPDOWN_CHOICE_TEXT_ICON = 20;
 
 		protected static $_types = null;
 
@@ -31,6 +29,7 @@
 		 * This custom types options (if any)
 		 *
 		 * @var array
+		 * @Relates(class="TBGCustomDatatypeOption", collection=true, foreign_column="customfield_id", orderby="sort_order")
 		 */
 		protected $_options = null;
 
@@ -38,6 +37,7 @@
 		 * The custom types description
 		 *
 		 * @var string
+		 * @Column(type="string", length=200)
 		 */
 		protected $_description = null;
 
@@ -45,6 +45,7 @@
 		 * The custom types instructions
 		 *
 		 * @var string
+		 * @Column(type="text")
 		 */
 		protected $_instructions = null;
 
@@ -57,14 +58,7 @@
 		{
 			if (self::$_types === null)
 			{
-				self::$_types = array();
-				if ($items = B2DB::getTable('TBGCustomFieldsTable')->getAll())
-				{
-					foreach ($items as $row_id => $row)
-					{
-						self::$_types[$row->get(TBGCustomFieldsTable::FIELD_KEY)] = TBGContext::factory()->TBGCustomDatatype($row_id, $row);
-					}
-				}
+				self::$_types = TBGCustomFieldsTable::getTable()->getAll();
 			}
 			return self::$_types;
 		}
@@ -97,8 +91,9 @@
 
 		}
 
-		public function _preSave($is_new)
+		protected function _preSave($is_new)
 		{
+			parent::_preSave($is_new);
 			if ($is_new)
 			{
 				$this->_generateKey();
@@ -114,10 +109,10 @@
 		 *
 		 * @param integer $id
 		 */
-		public function _preDelete()
+		protected function _preDelete()
 		{
-			$key = B2DB::getTable('TBGCustomFieldsTable')->getKeyFromId($this->getID());
-			B2DB::getTable('TBGCustomFieldOptionsTable')->doDeleteByFieldKey($key);
+			TBGCustomFieldOptionsTable::getTable()->deleteCustomFieldOptions($this->getID());
+			\b2db\Core::getTable('TBGIssueFieldsTable')->deleteByIssueFieldKey($key);
 		}
 
 		public static function doesKeyExist($key)
@@ -134,7 +129,7 @@
 		 */
 		public static function getByKey($key)
 		{
-			$row = B2DB::getTable('TBGCustomFieldsTable')->getByKey($key);
+			$row = \b2db\Core::getTable('TBGCustomFieldsTable')->getByKey($key);
 			if ($row)
 			{
 				return TBGContext::factory()->TBGCustomDatatype($row->get(TBGCustomFieldsTable::ID), $row);
@@ -142,9 +137,16 @@
 			return null;
 		}
 
+		public static function getCustomChoiceFieldsAsArray()
+		{
+			return array(self::CHECKBOX_CHOICES, self::DROPDOWN_CHOICE_TEXT, self::RADIO_CHOICE);
+		}
+
 		public static function getChoiceFieldsAsArray()
 		{
-			return array(self::CHECKBOX_CHOICES, self::DROPDOWN_CHOICE_TEXT, self::DROPDOWN_CHOICE_TEXT_COLOR, self::DROPDOWN_CHOICE_TEXT_COLORED, self::DROPDOWN_CHOICE_TEXT_ICON, self::RADIO_CHOICE);
+			return array(self::CHECKBOX_CHOICES, self::DROPDOWN_CHOICE_TEXT, self::RADIO_CHOICE, self::RELEASES_CHOICE,
+			             self::COMPONENTS_CHOICE, self::EDITIONS_CHOICE, self::STATUS_CHOICE, self::USER_CHOICE,
+			             self::TEAM_CHOICE, self::USER_OR_TEAM_CHOICE);
 		}
 
 		/**
@@ -152,7 +154,7 @@
 		 * 
 		 * @param B2DBrow $row [optional] A B2DBrow to use
 		 */
-		public function _construct(B2DBRow $row, $foreign_key = null)
+		public function _construct(\b2db\Row $row, $foreign_key = null)
 		{
 			$this->_description = $this->_description ?: $this->_name;
 		}
@@ -161,7 +163,7 @@
 		{
 			if ($this->_options === null)
 			{
-				$this->_options = TBGCustomDatatypeOption::getAllByKey($this->_key);
+				$this->_b2dbLazyload('_options');
 			}
 		}
 
@@ -182,6 +184,7 @@
 			$option->setKey($this->getKey());
 			$option->setValue($value);
 			$option->setItemdata($itemdata);
+			$option->setCustomdatatype($this->_id);
 			$option->save();
 			$this->_options = null;
 			return $option;
@@ -219,6 +222,11 @@
 		}
 
 		public function hasCustomOptions()
+		{
+			return (bool) in_array($this->getType(), self::getCustomChoiceFieldsAsArray());
+		}
+
+		public function hasPredefinedOptions()
 		{
 			return (bool) in_array($this->getType(), self::getChoiceFieldsAsArray());
 		}

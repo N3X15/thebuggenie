@@ -15,6 +15,8 @@
 	 *
 	 * @package auth_ldap
 	 * @subpackage core
+	 *
+	 * @Table(name="TBGModulesTable")
 	 */
 	class TBGLDAPAuthentication extends TBGModule
 	{
@@ -27,7 +29,7 @@
 		
 		protected $_module_config_description = 'Configure server connection settings';
 		
-		protected $_module_version = '0.1';
+		protected $_module_version = '1.0';
 		
 		protected $_has_config_settings = true;
 
@@ -404,6 +406,29 @@
 		public function verifyLogin($username)
 		{
 			return $this->doLogin($username, 'a', 2);
+		}
+		
+		/*
+		 * Actions on logout
+		 */
+		public function logout()
+		{
+			
+		}
+		
+		/*
+		 * Actions on login - if there are no credentials supplied try an autologin
+		 * Not applicable for this module
+		 * 
+		 * Return:
+		 * true - succeeded operation but no autologin
+		 * false - invalid cookies found
+		 * Row from TBGUsersTable - succeeded operation, user found
+		 * 
+		 */
+		public function doAutoLogin()
+		{
+			return true;
 		}
 	}
 

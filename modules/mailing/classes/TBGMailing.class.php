@@ -1,5 +1,8 @@
 <?php
 
+	/**
+	 * @Table(name="TBGModulesTable")
+	 */
 	class TBGMailing extends TBGModule
 	{
 
@@ -43,6 +46,10 @@
 		 */
 		const NOTIFY_ISSUE_COMMENTED_ON = 'notify_issue_commented_on';
 		
+		const MAIL_ENCODING_BASE64 = 3;
+		const MAIL_ENCODING_QUOTED = 4;
+		const MAIL_ENCODING_UTF7 = 0;
+		
 		protected $_longname = 'Email communication';
 		
 		protected $_description = 'Enables in- and outgoing email functionality';
@@ -51,7 +58,7 @@
 		
 		protected $_module_config_description = 'Set up in- and outgoing email communication from this section';
 		
-		protected $_account_settings_name = 'Notifications';
+		protected $_account_settings_name = 'Notification settings';
 		
 		protected $_account_settings_logo = 'notification_settings.png';
 		
@@ -76,26 +83,33 @@
 		protected function _initialize()
 		{
 		}
-
+		
 		protected function _addListeners()
 		{
-			TBGEvent::listen('core', 'TBGUser::createNew', array($this, 'listen_registerUser'));
+			TBGEvent::listen('core', 'TBGUser::_postSave', array($this, 'listen_registerUser'));
 			TBGEvent::listen('core', 'password_reset', array($this, 'listen_forgottenPassword'));
 			TBGEvent::listen('core', 'login_form_pane', array($this, 'listen_loginPane'));
 			TBGEvent::listen('core', 'login_form_tab', array($this, 'listen_loginTab'));
-			//TBGEvent::listen('core', 'TBGIssue::save', array($this, 'listen_issueSave'));
+			TBGEvent::listen('core', 'TBGUser::addScope', array($this, 'listen_addScope'));
 			TBGEvent::listen('core', 'TBGIssue::createNew', array($this, 'listen_issueCreate'));
-			TBGEvent::listen('core', 'TBGUser::createNew', array($this, 'listen_createUser'));
+			TBGEvent::listen('core', 'TBGUser::_postSave', array($this, 'listen_createUser'));
+			TBGEvent::listen('core', 'TBGIssue::addSystemComment', array($this, 'listen_TBGComment_createNew'));
 			TBGEvent::listen('core', 'TBGComment::createNew', array($this, 'listen_TBGComment_createNew'));
 			TBGEvent::listen('core', 'header_begins', array($this, 'listen_headerBegins'));
 			TBGEvent::listen('core', 'viewissue', array($this, 'listen_viewissue'));
+			TBGEvent::listen('core', 'user_dropdown_anon', array($this, 'listen_userDropdownAnon'));
+			TBGEvent::listen('core', 'config_project_tabs', array($this, 'listen_projectconfig_tab'));
+			TBGEvent::listen('core', 'config_project_panes', array($this, 'listen_projectconfig_panel'));
+			TBGEvent::listen('core', 'get_backdrop_partial', array($this, 'listen_get_backdrop_partial'));
 		}
 
 		protected function _addRoutes()
 		{
 			$this->addRoute('forgot', '/forgot', 'forgot');
-			$this->addRoute('reset', '/reset/:user/:reset_hash', 'resetPassword', array('continue' => true));
 			$this->addRoute('mailing_test_email', '/mailing/test', 'testEmail');
+			$this->addRoute('mailing_save_incoming_account', '/mailing/:project_key/incoming_account/*', 'saveIncomingAccount');
+			$this->addRoute('mailing_check_account', '/mailing/incoming_account/:account_id/check', 'checkIncomingAccount');
+			$this->addRoute('mailing_delete_account', '/mailing/incoming_account/:account_id/delete', 'deleteIncomingAccount');
 		}
 		
 		protected function _install($scope)
@@ -118,7 +132,7 @@
 		public function postConfigSettings(TBGRequest $request)
 		{
 			TBGContext::loadLibrary('common');
-			$settings = array('smtp_host', 'smtp_port', 'smtp_user', 'timeout', 'mail_type', 'enable_outgoing_notifications',
+			$settings = array('smtp_host', 'smtp_port', 'smtp_user', 'timeout', 'mail_type', 'enable_outgoing_notifications', 'cli_mailing_url',
 								'smtp_pwd', 'headcharset', 'from_name', 'from_addr', 'ehlo', 'use_queue', 'no_dash_f', 'activation_needed');
 			foreach ($settings as $setting)
 			{
@@ -130,7 +144,7 @@
 					switch($setting)
 					{
 						case 'smtp_host':
-							if ($request->getParameter('mail_type') == TBGMailer::MAIL_TYPE_B2M && !tbg_check_syntax($value, "MAILSERVER"))
+							if ($request['mail_type'] == TBGMailer::MAIL_TYPE_B2M && !tbg_check_syntax($value, "MAILSERVER"))
 							{
 								throw new Exception(TBGContext::getI18n()->__('Please provide a valid setting for SMTP server address'));
 							}
@@ -142,13 +156,13 @@
 							}
 							break;
 						case 'timeout':
-							if ($request->getParameter('mail_type') == TBGMailer::MAIL_TYPE_B2M && !is_numeric($value) || $value < 0)
+							if ($request['mail_type'] == TBGMailer::MAIL_TYPE_B2M && !is_numeric($value) || $value < 0)
 							{
 								throw new Exception(TBGContext::getI18n()->__('Please provide a valid setting for SMTP server timeout'));
 							}
 							break;
 						case 'smtp_port':
-							if ($request->getParameter('mail_type') == TBGMailer::MAIL_TYPE_B2M && !is_numeric($value) || $value < 1)
+							if ($request['mail_type'] == TBGMailer::MAIL_TYPE_B2M && !is_numeric($value) || $value < 1)
 							{
 								throw new Exception(TBGContext::getI18n()->__('Please provide a valid setting for SMTP server port'));
 							}							
@@ -165,6 +179,13 @@
 							break;
 						case 'activation_needed':
 							$value = (int) $request->getParameter($setting, 0);
+							break;
+						case 'cli_mailing_url':
+							$value = $request->getParameter($setting);
+							if (substr($value, -1) == '/')
+							{
+								$value = substr($value, 0, strlen($value) - 1);
+							}
 							break;
 					}
 					$this->saveSetting($setting, $value);
@@ -221,6 +242,30 @@
 			}
 		}
 
+		public function listen_addScope(TBGEvent $event)
+		{
+			if ($this->isOutgoingNotificationsEnabled())
+			{
+				$user = $event->getSubject();
+				$subject = TBGContext::getI18n()->__('Your account in The Bug Genie has been added to a new scope');
+				$scope = $event->getParameter('scope');
+				$message = $this->createNewTBGMimemailFromTemplate($subject, 'addtoscope', array('user' => $user, 'scope' => $scope), null, array(array($user->getBuddyname(), $user->getEmail())));
+
+				$message->addReplacementValues(array('%user_buddyname%' => $user->getBuddyname()));
+				$message->addReplacementValues(array('%user_username%' => $user->getUsername()));
+
+				try
+				{
+					$this->sendMail($message);
+					$event->setProcessed();
+				}
+				catch (Exception $e)
+				{
+					throw $e;
+				}
+			}
+		}
+
 		public function listen_loginPane(TBGEvent $event)
 		{
 			if ($this->isOutgoingNotificationsEnabled())
@@ -243,15 +288,21 @@
 			{
 				$subject = TBGContext::getI18n()->__('Password reset');
 				$message = $this->createNewTBGMimemailFromTemplate($subject, 'passwordreset', array('password' => $event->getParameter('password')));
+				$message->addReplacementValues(array('%password%' => $event->getParameter('password')));
 				$this->_sendToUsers($event->getSubject(), $message);
 			}
 		}
 		
 		public function listen_headerBegins(TBGEvent $event)
 		{
-			if ($this->isOutgoingNotificationsEnabled() && TBGContext::getUser()->isGuest())
-			{			
-				TBGContext::getResponse()->addJavascript('forgot.js');
+
+		}
+		
+		public function listen_userDropdownAnon(TBGEvent $event)
+		{
+			if ($this->isOutgoingNotificationsEnabled())
+			{
+				TBGActionComponent::includeTemplate('mailing/userDropdownAnon', $event->getParameters());
 			}
 		}
 		
@@ -297,7 +348,7 @@
 	
 			// Add all users from the team owning the issue if valid
 			// or add the owning user if a user owns the issue
-			if ($issue->getOwnerType() == TBGIdentifiableClass::TYPE_TEAM)
+			if ($issue->getOwner() instanceof TBGTeam)
 			{
 				foreach ($issue->getOwner()->getMembers() as $member)
 				{
@@ -305,10 +356,10 @@
 					$uids[$member->getID()] = $member->getID();
 				}
 			}
-			elseif ($issue->getOwnerType() == TBGIdentifiableClass::TYPE_USER)
+			elseif ($issue->getOwner() instanceof TBGUser)
 			{
-				if (!($issue->getOwnerID() == $cu && !$ns))
-					$uids[$issue->getOwnerID()] = $issue->getOwnerID();
+				if (!($issue->getOwner()->getID() == $cu && !$ns))
+					$uids[$issue->getOwner()->getID()] = $issue->getOwner()->getID();
 			}
 
 			// Add the poster
@@ -329,7 +380,7 @@
 
 			// Add all users from the team assigned to the issue if valid
 			// or add the assigned user if a user is assigned to the issue
-			if ($issue->getAssigneeType() == TBGIdentifiableClass::TYPE_TEAM)
+			if ($issue->getAssignee() instanceof TBGTeam)
 			{
 				// Get team member IDs
 				foreach ($issue->getAssignee()->getMembers() as $member)
@@ -339,15 +390,15 @@
 					$uids[$member->getID()] = $member->getID();
 				}
 			}
-			elseif ($issue->getAssigneeType() == TBGIdentifiableClass::TYPE_USER)
+			elseif ($issue->getAssignee() instanceof TBGUser)
 			{
-				if (!($issue->getAssigneeID() == $cu && !$ns) && !(!$this->getSetting(self::NOTIFY_ISSUE_ASSIGNED_UPDATED, $issue->getAssigneeID())))
-					$uids[$issue->getAssigneeID()] = $issue->getAssigneeID();
+				if (!($issue->getAssignee()->getID() == $cu && !$ns) && !(!$this->getSetting(self::NOTIFY_ISSUE_ASSIGNED_UPDATED, $issue->getAssignee()->getID())))
+					$uids[$issue->getAssignee()->getID()] = $issue->getAssignee()->getID();
 			}
 			
 			// Add all users in the team who leads the project, if valid
 			// or add the user who leads the project, if valid
-			if ($issue->getProject()->getLeaderType() == TBGIdentifiableClass::TYPE_TEAM)
+			if ($issue->getProject()->getLeader() instanceof TBGTeam)
 			{
 				foreach ($issue->getProject()->getLeader()->getMembers() as $member)
 				{
@@ -356,14 +407,15 @@
 					$uids[$member->getID()] = $member->getID();
 				}
 			}
-			elseif ($issue->getProject()->getLeaderType() == TBGIdentifiableClass::TYPE_USER)
+			elseif ($issue->getProject()->getLeader() instanceof TBGUser)
 			{
-				if (!($issue->getProject()->getLeaderID() == $cu && !$ns) && !(!$this->getSetting(self::NOTIFY_ISSUE_PROJECT_ASSIGNED, $issue->getProject()->getLeaderID())))
-					$uids[$issue->getProject()->getLeaderID()] = $issue->getProject()->getLeaderID();
+				$lid = $issue->getProject()->getLeader()->getID();
+				if (!($lid == $cu && !$ns) && !(!$this->getSetting(self::NOTIFY_ISSUE_PROJECT_ASSIGNED, $lid)))
+					$uids[$lid] = $lid;
 			}
 	
 			// Same for QA
-			if ($issue->getProject()->getQaResponsibleType() == TBGIdentifiableClass::TYPE_TEAM)
+			if ($issue->getProject()->getQaResponsible() instanceof TBGTeam)
 			{
 				foreach ($issue->getProject()->getQaResponsible()->getMembers() as $member)
 				{
@@ -372,10 +424,11 @@
 					$uids[$member->getID()] = $member->getID();
 				}
 			}
-			elseif ($issue->getProject()->getQaResponsibleType() == TBGIdentifiableClass::TYPE_USER)
+			elseif ($issue->getProject()->getQaResponsible() instanceof TBGUser)
 			{
-				if (!($issue->getProject()->getQaResponsibleID() == $cu && !$ns) && !(!$this->getSetting(self::NOTIFY_ISSUE_PROJECT_ASSIGNED, $issue->getProject()->getQaResponsibleID())))
-					$uids[$issue->getProject()->getQaResponsibleID()] = $issue->getProject()->getQaResponsibleID();
+				$qaid = $issue->getProject()->getQaResponsible()->getID();
+				if (!($qaid == $cu && !$ns) && !(!$this->getSetting(self::NOTIFY_ISSUE_PROJECT_ASSIGNED, $qaid)))
+					$uids[$qaid] = $qaid;
 			}
 			
 			foreach ($issue->getProject()->getAssignedTeams() as $team_id => $assignments)
@@ -397,7 +450,7 @@
 			// Add all users relevant for all affected editions
 			foreach ($issue->getEditions() as $edition_list)
 			{
-				if ($edition_list['edition']->getLeaderType() == TBGIdentifiableClass::TYPE_TEAM)
+				if ($edition_list['edition']->getLeader() instanceof TBGTeam)
 				{
 					foreach ($edition_list['edition']->getLeader()->getMembers() as $member)
 					{
@@ -406,13 +459,13 @@
 						$uids[$member->getID()] = $member->getID();
 					}
 				}
-				elseif ($edition_list['edition']->getLeaderType() == TBGIdentifiableClass::TYPE_USER)
+				elseif ($edition_list['edition']->getLeader() instanceof TBGUser)
 				{
 					if (!($edition_list['edition']->getLeaderID() == $cu && !$ns) && !(!$this->getSetting(self::NOTIFY_ISSUE_PROJECT_ASSIGNED, $edition_list['edition']->getLeaderID())))
 						$uids[$edition_list['edition']->getLeaderID()] = $edition_list['edition']->getLeaderID();
 				}
 				
-				if ($edition_list['edition']->getQaResponsibleType() == TBGIdentifiableClass::TYPE_TEAM)
+				if ($edition_list['edition']->getQaResponsible() instanceof TBGTeam)
 				{
 					foreach ($edition_list['edition']->getQaResponsible()->getMembers() as $member)
 					{
@@ -421,7 +474,7 @@
 						$uids[$member->getID()] = $member->getID();
 					}
 				}
-				elseif ($edition_list['edition']->getQaResponsibleType() == TBGIdentifiableClass::TYPE_USER)
+				elseif ($edition_list['edition']->getQaResponsible() instanceof TBGUser)
 				{
 					if (!($edition_list['edition']->getQaResponsibleID() == $cu && !$ns) && !(!$this->getSetting(self::NOTIFY_ISSUE_PROJECT_ASSIGNED, $edition_list['edition']->getQaResponsibleID())))
 						$uids[$edition_list['edition']->getQaResponsibleID()] = $edition_list['edition']->getQaResponsibleID();
@@ -501,7 +554,7 @@
 				if ($issue instanceof TBGIssue)
 				{
 					$to_users = $this->_getIssueRelatedUsers($issue);
-					$subject = TBGContext::getI18n()->__('[%project_name%] %issue_type% %issue_no% - "%issue_title%" created', array('%project_name%' => $issue->getProject()->getKey(), '%issue_type%' => TBGContext::getI18n()->__($issue->getIssueType()->getName()), '%issue_no%' => $issue->getFormattedIssueNo(true), '%issue_title%' => $issue->getTitle()));
+					$subject = TBGContext::getI18n()->__('[%project_name%] %issue_type% %issue_no% - %issue_title%', array('%project_name%' => $issue->getProject()->getKey(), '%issue_type%' => TBGContext::getI18n()->__($issue->getIssueType()->getName()), '%issue_no%' => $issue->getFormattedIssueNo(true), '%issue_title%' => html_entity_decode($issue->getTitle(), ENT_COMPAT, TBGContext::getI18n()->getCharset())));
 					$message = $this->createNewTBGMimemailFromTemplate($subject, 'issuecreate', array('issue' => $issue));
 					$this->_sendToUsers($to_users, $message);
 				}
@@ -523,7 +576,7 @@
 						$message->setLanguage($user->getLanguage());
 						$message->clearRecipients();
 						$message->addReplacementValues(array('%user_buddyname%' => $user->getBuddyname(), '%user_username%' => $user->getUsername()));
-						$message->addTo($user->getEmail(), $user->getBuddyname());
+						$message->addTo($user->getEmail(), mb_encode_mimeheader($user->getBuddyname(), TBGContext::getI18n()->getCharset(), 'B'));
 
 						try
 						{
@@ -536,6 +589,27 @@
 					}
 				}
 			}
+		}
+
+		public function listen_projectconfig_tab(TBGEvent $event)
+		{
+			TBGActionComponent::includeTemplate('mailing/projectconfig_tab', array('selected_tab' => $event->getParameter('selected_tab')));
+		}
+		
+		public function listen_get_backdrop_partial(TBGEvent $event)
+		{
+			if ($event->getSubject() == 'mailing_editincomingemailaccount')
+			{
+				$account = new TBGIncomingEmailAccount(TBGContext::getRequest()->getParameter('account_id'));
+				$event->addToReturnList($account, 'account');
+				$event->setReturnValue('mailing/editincomingemailaccount');
+				$event->setProcessed();
+			}
+		}
+		
+		public function listen_projectconfig_panel(TBGEvent $event)
+		{
+			TBGActionComponent::includeTemplate('mailing/projectconfig_panel', array('selected_tab' => $event->getParameter('selected_tab'), 'access_level' => $event->getParameter('access_level'), 'project' => $event->getParameter('project')));
 		}
 		
 		public function listen_TBGComment_createNew(TBGEvent $event)
@@ -552,18 +626,12 @@
 						$content = $comment->getContent();
 						$to_users = $this->_getIssueRelatedUsers($issue);
 						
-						$subject = TBGContext::getI18n()->__('[%project_name%] %issue_type% %issue_no% - "%issue_title%" updated', array('%project_name%' => $issue->getProject()->getKey(), '%issue_type%' => TBGContext::getI18n()->__($issue->getIssueType()->getName()), '%issue_no%' => $issue->getFormattedIssueNo(true), '%issue_title%' => $issue->getTitle()));
+						$subject = TBGContext::getI18n()->__('Re: [%project_name%] %issue_type% %issue_no% - %issue_title%', array('%project_name%' => $issue->getProject()->getKey(), '%issue_type%' => TBGContext::getI18n()->__($issue->getIssueType()->getName()), '%issue_no%' => $issue->getFormattedIssueNo(true), '%issue_title%' => html_entity_decode($issue->getTitle(), ENT_COMPAT, TBGContext::getI18n()->getCharset())));
 						$message = $this->createNewTBGMimemailFromTemplate($subject, 'issueupdate', array('issue' => $issue, 'comment' => $content, 'updated_by' => $comment->getPostedBy()));
-//						var_dump($message);
 						$this->_sendToUsers($to_users, $message);
-//						$subject = TBGContext::getI18n()->__('[%project_name%] %issue_type% %issue_no% - Comment added by %comment_user%', array('%project_name%' => $issue->getProject()->getKey(), '%issue_type%' => TBGContext::getI18n()->__($issue->getIssueType()->getName()), '%issue_no%' => $issue->getFormattedIssueNo(true), '%comment_user%' => $comment->getPostedBy()->getName()));
-//						$message = $this->createNewTBGMimemailFromTemplate($subject, 'issuecomment', array('issue' => $issue, 'comment' => $comment));
-//						$this->_sendToUsers($to_users, $message);
 					}
 					catch (Exception $e)
 					{
-//						var_dump('fu');
-//						var_dump($e);die();
 						throw $e;
 					}
 				}
@@ -580,11 +648,16 @@
 				{
 					$to_users = $this->_getIssueRelatedUsers($issue);
 
-					$subject = TBGContext::getI18n()->__('[%project_name%] %issue_type% %issue_no% - "%issue_title%" updated', array('%project_name%' => $issue->getProject()->getKey(), '%issue_type%' => TBGContext::getI18n()->__($issue->getIssueType()->getName()), '%issue_no%' => $issue->getFormattedIssueNo(true), '%issue_title%' => $issue->getTitle()));
+					$subject = TBGContext::getI18n()->__('Re: [%project_name%] %issue_type% %issue_no% - %issue_title%', array('%project_name%' => $issue->getProject()->getKey(), '%issue_type%' => TBGContext::getI18n()->__($issue->getIssueType()->getName()), '%issue_no%' => $issue->getFormattedIssueNo(true), '%issue_title%' => html_entity_decode($issue->getTitle(), ENT_COMPAT, TBGContext::getI18n()->getCharset())));
 					$message = $this->createNewTBGMimemailFromTemplate($subject, 'issueupdate', array('issue' => $issue, 'comment_lines' => $event->getParameter('comment_lines'), 'updated_by' => $event->getParameter('updated_by')));
 					$this->_sendToUsers($to_users, $message);
 				}
 			}
+		}
+
+		public function getCLIMailingUrl()
+		{
+			return $this->getSetting('cli_mailing_url');
 		}
 
 		public function getMailerType()
@@ -656,13 +729,28 @@
 			$pre_html_message = '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN"><html><head><meta http-equiv=Content-Type content="text/html; charset=' . $mail->getCharset() . '"><title>' . TBGSettings::getTBGname() . '</title></head><body>';
 			$post_html_message = '</body></html>';
 			$mail->decorateMessageHTML($pre_html_message, $post_html_message);
-			$mail->addReplacementValues(array('%thebuggenie_url%' => TBGContext::getRouting()->generate('home', array(), false)));
+			if (TBGContext::isCLI())
+			{
+				$mail->addReplacementValues(array('%thebuggenie_url%' => $this->getCLIMailingUrl() . TBGContext::getRouting()->generate('home')));
+			}
+			else
+			{
+				$mail->addReplacementValues(array('%thebuggenie_url%' => TBGContext::getRouting()->generate('home', array(), false)));
+			}
 		}
 		
 		protected function _setAdditionalMailValues(TBGMimemail $mail, array $parameters)
 		{
-			$mail->addReplacementValues(array('%link_to_reset_password%' => isset($parameters['user']) ? TBGContext::getRouting()->generate('reset', array('user' => str_replace('.', '%2E', $parameters['user']->getUsername()), 'reset_hash' => $parameters['user']->getHashPassword(), 'id' => $parameters['user']->getHashPassword()), false) : '' ));
-			$mail->addReplacementValues(array('%link_to_activate%' => isset($parameters['user']) ? TBGContext::getRouting()->generate('activate', array('user' => str_replace('.', '%2E', $parameters['user']->getUsername()), 'key' => $parameters['user']->getHashPassword()), false) : ''));
+			if (TBGContext::isCLI())
+			{
+				$mail->addReplacementValues(array('%link_to_reset_password%' => isset($parameters['user']) ? $this->getCLIMailingUrl() . TBGContext::getRouting()->generate('reset_password', array('user' => str_replace('.', '%2E', $parameters['user']->getUsername()), 'reset_hash' => $parameters['user']->getHashPassword())) : '' ));
+				$mail->addReplacementValues(array('%link_to_activate%' => isset($parameters['user']) ? $this->getCLIMailingUrl() . TBGContext::getRouting()->generate('activate', array('user' => str_replace('.', '%2E', $parameters['user']->getUsername()), 'key' => $parameters['user']->getHashPassword())) : ''));
+			}
+			else
+			{
+				$mail->addReplacementValues(array('%link_to_reset_password%' => isset($parameters['user']) ? TBGContext::getRouting()->generate('reset_password', array('user' => str_replace('.', '%2E', $parameters['user']->getUsername()), 'reset_hash' => $parameters['user']->getHashPassword()), false) : '' ));
+				$mail->addReplacementValues(array('%link_to_activate%' => isset($parameters['user']) ? TBGContext::getRouting()->generate('activate', array('user' => str_replace('.', '%2E', $parameters['user']->getUsername()), 'key' => $parameters['user']->getHashPassword()), false) : ''));
+			}
 		}
 
 		/**
@@ -681,8 +769,6 @@
 		{
 			try
 			{
-				//if (file_exists(TBGContext::getRouting()->getCurrentRouteModule() . $module . DIRECTORY_SEPARATOR . $templatefile))
-				//if($basepath . $module . DIRECTORY_SEPARATOR . 'i18n' . DIRECTORY_SEPARATOR . $this->_language . DIRECTORY_SEPARATOR . $templatefile)
 				$mail = TBGMimemail::createNewFromTemplate($subject, $template, $parameters, $language, $recipients, $charset);
 				$this->_setInitialMailValues($mail);
 				$this->_setAdditionalMailValues($mail, $parameters);
@@ -742,11 +828,45 @@
 
 		public function postAccountSettings(TBGRequest $request)
 		{
-			$settings = array(self::NOTIFY_ISSUE_ASSIGNED_UPDATED, self::NOTIFY_ISSUE_ONCE, self::NOTIFY_ISSUE_POSTED_UPDATED, self::NOTIFY_ISSUE_PROJECT_ASSIGNED, self::NOTIFY_ISSUE_RELATED_PROJECT_TEAMASSIGNED, self::NOTIFY_ISSUE_TEAMASSIGNED_UPDATED, self::NOTIFY_ISSUE_UPDATED_SELF, self::NOTIFY_ISSUE_COMMENTED_ON);
 			$uid = TBGContext::getUser()->getID();
-			foreach ($settings as $setting)
+			switch ($request['notification_settings_preset'])
 			{
-				$this->saveSetting($setting, (int) $request->getParameter($setting, 0), $uid);
+				case 'silent':
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_POSTED_UPDATED, true, $uid);
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_ONCE, true, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_ASSIGNED_UPDATED, false, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_UPDATED_SELF, false, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_TEAMASSIGNED_UPDATED, false, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_RELATED_PROJECT_TEAMASSIGNED, false, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_PROJECT_ASSIGNED, false, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_COMMENTED_ON, false, $uid); 
+					break;
+				case 'recommended':
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_POSTED_UPDATED, true, $uid);
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_ONCE, true, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_ASSIGNED_UPDATED, true, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_UPDATED_SELF, false, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_TEAMASSIGNED_UPDATED, true, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_RELATED_PROJECT_TEAMASSIGNED, false, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_PROJECT_ASSIGNED, true, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_COMMENTED_ON, true, $uid); 
+					break;
+				case 'verbose':
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_POSTED_UPDATED, true, $uid);
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_ONCE, false, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_ASSIGNED_UPDATED, true, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_UPDATED_SELF, true, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_TEAMASSIGNED_UPDATED, true, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_RELATED_PROJECT_TEAMASSIGNED, true, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_PROJECT_ASSIGNED, true, $uid); 
+					$this->saveSetting(TBGMailing::NOTIFY_ISSUE_COMMENTED_ON, true, $uid); 
+					break;
+				default:
+					$settings = array(self::NOTIFY_ISSUE_ASSIGNED_UPDATED, self::NOTIFY_ISSUE_ONCE, self::NOTIFY_ISSUE_POSTED_UPDATED, self::NOTIFY_ISSUE_PROJECT_ASSIGNED, self::NOTIFY_ISSUE_RELATED_PROJECT_TEAMASSIGNED, self::NOTIFY_ISSUE_TEAMASSIGNED_UPDATED, self::NOTIFY_ISSUE_UPDATED_SELF, self::NOTIFY_ISSUE_COMMENTED_ON);
+					foreach ($settings as $setting)
+					{
+						$this->saveSetting($setting, (int) $request->getParameter($setting, 0), $uid);
+					}
 			}
 			return true;
 		}
@@ -787,5 +907,331 @@
 		{
 			$this->addDefaultSettingsToAllUsers();
 		}
+
+		function getMailMimeType($structure)
+		{
+			$primary_mime_type = array("TEXT", "MULTIPART", "MESSAGE", "APPLICATION", "AUDIO", "IMAGE", "VIDEO", "OTHER");
+			if ($structure->subtype)
+			{
+				$type = $primary_mime_type[(int) $structure->type] . '/' . $structure->subtype;
+			}
+			else
+			{
+				$type = "TEXT/PLAIN";
+			}
+			return $type;
+		}
 		
+		function getMailPart($stream, $msg_number, $mime_type, $structure, $part_number = false)
+		{
+			if ($mime_type == $this->getMailMimeType($structure))
+			{
+				if (!$part_number)
+				{
+					$part_number = "1";
+				}
+				$text = imap_fetchbody($stream, $msg_number, $part_number);
+				if ($structure->encoding == self::MAIL_ENCODING_BASE64)
+				{
+					$ret_val = imap_base64($text);
+				}
+				elseif ($structure->encoding == self::MAIL_ENCODING_QUOTED)
+				{
+					$ret_val = imap_qprint($text);
+				}
+				else
+				{
+					$ret_val = $text;
+				}
+				
+				return $ret_val;
+			}
+
+			if ($structure->type == 1) /* multipart */
+			{
+				while (list($index, $sub_structure) = each($structure->parts))
+				{
+					if ($part_number)
+					{
+						$prefix = $part_number . '.';
+					}
+					$data = $this->getMailPart($stream, $msg_number, $mime_type, $sub_structure, $prefix . ($index + 1));
+					if ($data)
+					{
+						return $data;
+					}
+				} // END OF WHILE
+			} // END OF MULTIPART
+			return false;
+		}
+
+		function getMailAttachments($structure, $connection, $message_number)
+		{
+			$attachments = array();
+			if (isset($structure->parts) && count($structure->parts))
+			{
+				for ($i = 0; $i < count($structure->parts); $i++)
+				{
+					$attachments[$i] = array(
+						'is_attachment' => false,
+						'filename' => '',
+						'name' => '',
+						'mimetype' => '',
+						'attachment' => '');
+
+					if ($structure->parts[$i]->ifdparameters)
+					{
+						foreach ($structure->parts[$i]->dparameters as $object)
+						{
+							if (strtolower($object->attribute) == 'filename')
+							{
+								$attachments[$i]['is_attachment'] = true;
+								$attachments[$i]['filename'] = $object->value;
+							}
+						}
+					}
+
+					if ($structure->parts[$i]->ifparameters)
+					{
+						foreach ($structure->parts[$i]->parameters as $object)
+						{
+							if (strtolower($object->attribute) == 'name')
+							{
+								$attachments[$i]['is_attachment'] = true;
+								$attachments[$i]['name'] = $object->value;
+							}
+						}
+					}
+
+					if ($attachments[$i]['is_attachment'])
+					{
+						$attachments[$i]['attachment'] = imap_fetchbody($connection, $message_number, $i + 1);
+						if ($structure->parts[$i]->encoding == 3)
+						{ // 3 = BASE64
+							$attachments[$i]['attachment'] = base64_decode($attachments[$i]['attachment']);
+						}
+						elseif ($structure->parts[$i]->encoding == 4)
+						{ // 4 = QUOTED-PRINTABLE
+							$attachments[$i]['attachment'] = quoted_printable_decode($attachments[$i]['attachment']);
+						}
+						$attachments[$i]['mimetype'] = $structure->parts[$i]->type."/".$structure->parts[$i]->subtype;
+					}
+					else
+					{
+						unset($attachments[$i]);
+					}
+				} // for($i = 0; $i < count($structure->parts); $i++)
+			} // if(isset($structure->parts) && count($structure->parts))
+
+			return $attachments;
+		}
+		
+		public function getIncomingEmailAccounts()
+		{
+			return TBGIncomingEmailAccount::getAll();
+		}
+		
+		public function getIncomingEmailAccountsForProject(TBGProject $project)
+		{
+			return TBGIncomingEmailAccount::getAllByProjectID($project->getID());
+		}
+		
+		public function processIncomingEmails($limit = 25)
+		{
+			foreach ($this->getIncomingEmailAccounts() as $account)
+			{
+				$this->processIncomingEmailAccount($account, $limit);
+			}
+		}
+		
+		public function getEmailAdressFromSenderString($from)
+		{
+			$tokens = explode(" ", $from);
+			foreach ($tokens as $email)
+			{
+				$email = str_replace(array("<", ">"), array("", ""), $email);
+				if (filter_var($email, FILTER_VALIDATE_EMAIL))
+					return $email;
+			}
+		}
+		
+		public function getOrCreateUserFromEmailString($email_string)
+		{
+			$email = $this->getEmailAdressFromSenderString($email_string);
+			if (!$user = TBGUser::findUser($email))
+			{
+				$name = $email;
+
+				if (($q_pos = strpos($email_string, "<")) !== false)
+				{
+					$name = trim(substr($email_string, 0, $q_pos - 1));
+				}
+
+				$user = new TBGUser();
+				
+				try
+				{
+					$user->setBuddyname($name);
+					$user->setEmail($email);
+					$user->setUsername($email);
+					$user->setValidated();
+					$user->setActivated();
+					$user->setEnabled();
+					$user->save();
+				}
+				catch (Exception $e)
+				{
+					return null;
+				}
+			}
+			
+			return $user;
+		}
+
+		public function processIncomingEmailCommand($content, TBGIssue $issue, TBGUser $user)
+		{
+			if (!$issue->isWorkflowTransitionsAvailable()) return false;
+			
+			$lines = preg_split("/(\r?\n)/", $content);
+			$first_line = array_shift($lines);
+			$commands = explode(" ", trim($first_line));
+			$command = array_shift($commands);
+			foreach ($issue->getAvailableWorkflowTransitions() as $transition)
+			{
+				if (strpos(str_replace(array(' ', '/'), array('', ''), mb_strtolower($transition->getName())), str_replace(array(' ', '/'), array('', ''), mb_strtolower($command))) !== false)
+				{
+					foreach ($commands as $single_command)
+					{
+						if (mb_strpos($single_command, '='))
+						{
+							list($key, $val) = explode('=', $single_command);
+							switch ($key)
+							{
+								case 'resolution':
+									if (($resolution = TBGResolution::getResolutionByKeyish($val)) instanceof TBGResolution)
+									{
+										TBGContext::getRequest()->setParameter('resolution_id', $resolution->getID());
+									}
+									break;
+								case 'status':
+									if (($status = TBGStatus::getStatusByKeyish($val)) instanceof TBGStatus)
+									{
+										TBGContext::getRequest()->setParameter('status_id', $status->getID());
+									}
+									break;
+							}
+						}
+					}
+					TBGContext::getRequest()->setParameter('comment_body', join("\n", $lines));
+					return $transition->transitionIssueToOutgoingStepFromRequest($issue, TBGContext::getRequest());
+				}
+			}
+		}
+		
+		public function processIncomingEmailAccount(TBGIncomingEmailAccount $account, $limit = 25)
+		{
+			$count = 0;
+			if ($emails = $account->getUnprocessedEmails())
+			{
+				try
+				{
+					$current_user = TBGContext::getUser();
+					foreach ($emails as $email)
+					{
+						$user = $this->getOrCreateUserFromEmailString($email->from);
+
+						if ($user instanceof TBGUser)
+						{
+							if (TBGContext::getUser()->getID() != $user->getID()) TBGContext::switchUserContext($user);
+
+							$message = $account->getMessage($email);
+							$data = ($message->getBodyPlain()) ? $message->getBodyPlain() : strip_tags($message->getBodyHTML());
+
+							$matches = array();
+							preg_match(TBGTextParser::getIssueRegex(), mb_decode_mimeheader($email->subject), $matches);
+
+							$issue = ($matches) ? TBGIssue::getIssueFromLink($matches[0], $account->getProject()) : null;
+
+							if ($issue instanceof TBGIssue)
+							{
+								$text = preg_replace('#(^\w.+:\n)?(^>.*(\n|$))+#mi', "", $data);
+								$text = trim($text);
+								if (!$this->processIncomingEmailCommand($text, $issue, $user) && $user->canPostComments())
+								{
+									$comment = new TBGComment();
+									$comment->setContent($text);
+									$comment->setPostedBy($user);
+									$comment->setTargetID($issue->getID());
+									$comment->setTargetType(TBGComment::TYPE_ISSUE);
+									$comment->save();
+								}
+							}
+							else
+							{
+								if ($user->canReportIssues($account->getProject()))
+								{
+									$issue = new TBGIssue();
+									$issue->setProject($account->getProject());
+									$issue->setTitle(mb_decode_mimeheader($email->subject));
+									$issue->setDescription($data);
+									$issue->setPostedBy($user);
+									$issue->setIssuetype($account->getIssuetype());
+									$issue->save();
+								}
+							}
+
+							if ($issue instanceof TBGIssue && $message->hasAttachments())
+							{
+								foreach ($message->getAttachments() as $attachment_no => $attachment)
+								{
+									echo 'saving attachment '.$attachment_no;
+									$name = $attachment['filename'];
+									$new_filename = TBGContext::getUser()->getID() . '_' . NOW . '_' . basename($name);
+									if (TBGSettings::getUploadStorage() == 'files')
+									{
+										$files_dir = TBGSettings::getUploadsLocalpath();
+										$filename = $files_dir.$new_filename;
+									}
+									else
+									{
+										$filename = $name;
+									}
+									TBGLogging::log('Creating issue attachment '.$filename.' from attachment '.$attachment_no);
+									echo 'Creating issue attachment '.$filename.' from attachment '.$attachment_no;
+									$content_type = $attachment['type'].'/'.$attachment['subtype'];
+									$file = new TBGFile();
+									$file->setRealFilename($new_filename);
+									$file->setOriginalFilename(basename($name));
+									$file->setContentType($content_type);
+									$file->setDescription($name);
+									$file->setUploadedBy(TBGContext::getUser());
+									if (TBGSettings::getUploadStorage() == 'database')
+									{
+										$file->setContent($attachment['data']);
+									}
+									else
+									{
+										TBGLogging::log('Saving file '.$new_filename.' with content from attachment '.$attachment_no);
+										file_put_contents($new_filename, $attachment['data']);
+									}
+									$file->save();
+									$issue->attachFile($file);
+								}
+							}
+
+							$count++;
+						}
+					}
+				}
+				catch (Exception $e)
+				{
+				}
+				if (TBGContext::getUser()->getID() != $current_user->getID()) TBGContext::switchUserContext($current_user);
+			}
+			$account->setTimeLastFetched(time());
+			$account->setNumberOfEmailsLastFetched($count);
+			$account->save();
+			return $count;
+		}
+
 	}
