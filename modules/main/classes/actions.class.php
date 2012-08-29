@@ -231,7 +231,7 @@
 		{
 			if (TBGSettings::isSingleProjectTracker())
 			{
-				if (($projects = TBGProject::getAll()) && $project = array_shift($projects))
+				if (($projects = TBGProject::getAllRootProjects()) && $project = array_shift($projects))
 				{
 					$this->forward(TBGContext::getRouting()->generate('project_dashboard', array('project_key' => $project->getKey())));
 				}
@@ -2155,6 +2155,12 @@
 		{
 			TBGSettings::hideInfoBox($request['key']);
 			return $this->renderJSON(array('hidden' => true));
+		}
+
+		public function runSetToggle(TBGRequest $request)
+		{
+			TBGSettings::setToggle($request['key'], $request['state']);
+			return $this->renderJSON(array('state' => $request['state']));
 		}
 
 		public function runGetUploadStatus(TBGRequest $request)
